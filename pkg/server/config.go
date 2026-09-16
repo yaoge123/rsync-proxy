@@ -44,8 +44,9 @@ type ProxySettings struct {
 	// RelayMaxDurationSecs is the maximum total wall-clock duration
 	// (in seconds) of the bidirectional relay phase. When exceeded
 	// the proxy closes the connection regardless of activity. 0 (the
-	// default) disables this hard cap. rsync clients will typically
-	// reconnect and resume on the next run.
+	// default) disables this hard cap. rsync does not automatically
+	// reconnect; retrying or resuming depends on how the caller invokes
+	// it (e.g. a script or cron job).
 	RelayMaxDurationSecs int `toml:"relay_max_duration"`
 	// TCPKeepAliveSecs enables TCP keepalive on accepted client
 	// connections and on dialed upstream connections. The value is

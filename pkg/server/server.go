@@ -1112,13 +1112,19 @@ func (s *Server) relay(ctx context.Context, index uint32, downConn net.Conn) (re
 		go func() {
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
-			// Sliding-window throughput state. lastSampleTime moves
-			// forward each time we reach a full window, with
-			// lastSampleBytes capturing the cumulative byte count at
-			// that moment. delta over the next window must meet
-			// minBytes or the connection is terminated.
+			// Sliding-window throughput state. The first sampling
+			// window is anchored at the moment the grace period ends,
+			// so the ramp-up phase (e.g. rsync's initial file-list
+			// exchange) is never counted towards the first measurement.
+			// Afterwards lastSampleTime moves forward each time a full
+			// window is reached, with lastSampleBytes capturing the
+			// cumulative byte count at that moment. delta over the next
+			// window must meet minBytes or the connection is terminated.
+			// When minGrace is 0 the window starts at relayStartedAt,
+			// preserving the original behaviour.
 			lastSampleTime := relayStartedAt
 			lastSampleBytes := int64(0)
+			graceEnded := minGrace <= 0
 			for {
 				select {
 				case <-sentClosed:
@@ -1145,20 +1151,32 @@ func (s *Server) relay(ctx context.Context, index uint32, downConn net.Conn) (re
 						_ = downConn.Close()
 						return
 					}
-					if throughputEnabled && now.Sub(relayStartedAt) >= minGrace && now.Sub(lastSampleTime) >= minWindow {
+					if throughputEnabled {
 						curBytes := info.SentBytes.Load() + info.ReceivedBytes.Load()
-						delta := curBytes - lastSampleBytes
-						if delta < minBytes {
-							idleTimedOut.Store(true)
-							s.getUpstreamCounters(upstreamName).throughputFloorTerminated.Add(1)
-							s.accessLog.F("client %s for module %s below throughput floor (%d bytes < %d bytes in %s), closing",
-								ip, moduleName, delta, minBytes, minWindow)
-							_ = upConn.Close()
-							_ = downConn.Close()
-							return
+						if !graceEnded {
+							if now.Sub(relayStartedAt) >= minGrace {
+								// Grace just ended: anchor a fresh
+								// window here so the ramp-up is
+								// excluded from the first
+								// measurement.
+								graceEnded = true
+								lastSampleTime = now
+								lastSampleBytes = curBytes
+							}
+						} else if now.Sub(lastSampleTime) >= minWindow {
+							delta := curBytes - lastSampleBytes
+							if delta < minBytes {
+								idleTimedOut.Store(true)
+								s.getUpstreamCounters(upstreamName).throughputFloorTerminated.Add(1)
+								s.accessLog.F("client %s for module %s below throughput floor (%d bytes < %d bytes in %s), closing",
+									ip, moduleName, delta, minBytes, minWindow)
+								_ = upConn.Close()
+								_ = downConn.Close()
+								return
+							}
+							lastSampleTime = now
+							lastSampleBytes = curBytes
 						}
-						lastSampleTime = now
-						lastSampleBytes = curBytes
 					}
 				}
 			}
