@@ -59,16 +59,31 @@ motd = "Served by rsync-proxy (https://github.com/ustclug/rsync-proxy)"
 # Throughput floor enforced during the relay phase. A connection
 # that transfers fewer than min_throughput_bytes (counting both
 # directions) over the most recent min_throughput_window seconds is
-# treated as slow-leeching and terminated. min_throughput_grace
-# gives a fresh connection this many seconds of ramp-up before the
-# floor is enforced; this matters because rsync's initial file-list
-# phase can take many minutes for very large modules (millions of
-# files), during which the apparent throughput is low. Defaults to
-# min_throughput_window when unset. Set min_throughput_bytes to 0
-# (the default) to disable the check. Typical starting values:
-# bytes = 1048576 (1 MiB), window = 60, grace = 600.
+# treated as slow-leeching and terminated. Set min_throughput_bytes
+# to 0 (the default) to disable the check.
+#
+# Choosing values: the effective floor is
+# min_throughput_bytes / min_throughput_window. A short window reacts
+# quickly but also raises the effective rate and is easily tripped by
+# a client that merely stalls for one window; a longer window smooths
+# transient stalls and lowers the rate. For a public mirror,
+# 1048576 (1 MiB) over 300 (5 minutes) works out to ~3.4 KiB/s
+# averaged over 5 minutes, which still terminates genuinely stalled
+# clients (most offenders transfer only a few hundred bytes per
+# minute) while sparing slow-but-legitimate ones. Avoid combining
+# 1 MiB with the 60s default, which is ~17.5 KiB/s and has been
+# observed to kill real transfers.
+#
+# min_throughput_grace exempts a fresh connection from the floor for
+# this many seconds; no measurement is taken during the grace period,
+# and the first sampling window starts only after it ends. This
+# matters because rsync's initial file-list phase can take many
+# minutes for very large modules (millions of files), during which
+# the apparent throughput is low. Defaults to min_throughput_window
+# when unset. Typical starting values:
+# bytes = 1048576 (1 MiB), window = 300, grace = 600.
 #min_throughput_bytes = 0
-#min_throughput_window = 60
+#min_throughput_window = 300
 #min_throughput_grace = 600
 
 [upstreams.u1]

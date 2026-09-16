@@ -1807,6 +1807,80 @@ func TestThroughputFloorTerminatesSlowConnection(t *testing.T) {
 	assert.Contains(t, string(logData), "for module fake")
 }
 
+// TestThroughputFloorExcludesGracePeriodFromFirstWindow verifies that
+// bytes transferred during the grace period are excluded from the first
+// throughput measurement window. A relay that is quiet during the
+// ramp-up (as during rsync's initial file-list exchange) but then
+// transfers well above the floor must not be torn down by the first
+// evaluation, which previously averaged over the whole grace period.
+func TestThroughputFloorExcludesGracePeriodFromFirstWindow(t *testing.T) {
+	srv := startServer(t)
+	defer srv.Close()
+	srv.RelayIdleTimeout = 0
+	srv.RelayMaxDuration = 0
+	// The grace period (2s) spans several ticks of the 1s-minimum
+	// ticker and the window (1s) is one tick, so the bytes sent during
+	// the ramp-up would dominate a window anchored at the start of the
+	// relay.
+	srv.MinThroughputBytes = 1000
+	srv.MinThroughputWindow = time.Second
+	srv.MinThroughputGrace = 2 * time.Second
+	accessLogPath := setupAccessLog(t, srv)
+
+	r := require.New(t)
+
+	fakeRsync := rsync.NewServer(func(conn *rsync.Conn) {
+		defer conn.Close()
+
+		if _, _, err := doServerHandshake(conn, RsyncdServerVersion); err != nil {
+			return
+		}
+		_, _ = io.ReadAll(conn)
+	})
+	fakeRsync.Start()
+	defer fakeRsync.Close()
+
+	srv.modules = map[string][]Target{
+		"fake": {{Upstream: "u1", Addr: fakeRsync.Listener.Addr().String()}},
+	}
+	srv.upstreams = []upstreamConfig{{Name: "u1"}}
+	srv.upstreamQueues = map[string]*queue.Queue{"u1": queue.New(0, 0)}
+
+	rawConn, err := net.Dial("tcp", srv.TCPListener.Addr().String())
+	r.NoError(err)
+	conn := rsync.NewConn(rawConn)
+	defer conn.Close()
+
+	_, err = doClientHandshake(conn, RsyncdServerVersion, "fake")
+	r.NoError(err)
+
+	// Ramp-up: trickle a few bytes, far below the floor. These are
+	// attributed to the grace period and must not count towards the
+	// first measured window.
+	_, err = conn.Write([]byte("hello"))
+	r.NoError(err)
+
+	// Wait until the grace period has elapsed.
+	time.Sleep(2100 * time.Millisecond)
+
+	// Transfer well above the floor for longer than one window plus one
+	// tick, so the first post-grace window is evaluated and passes.
+	deadline := time.Now().Add(2200 * time.Millisecond)
+	payload := make([]byte, 4000)
+	for time.Now().Before(deadline) {
+		_, err = conn.Write(payload)
+		r.NoError(err, "connection must remain usable after the grace period")
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	assert.Zero(t, srv.getUpstreamCounters("u1").throughputFloorTerminated.Load(),
+		"ramp-up bytes must not trigger the throughput floor")
+
+	logData, err := os.ReadFile(accessLogPath)
+	r.NoError(err)
+	assert.NotContains(t, string(logData), "below throughput floor")
+}
+
 // TestLoadConfigPropagatesDialTimeoutAndThroughputSettings verifies
 // that dial_timeout and the min_throughput_* settings are parsed,
 // validated, and propagated into the dialer and Server fields. It also
