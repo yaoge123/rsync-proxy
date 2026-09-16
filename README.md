@@ -112,6 +112,10 @@ cp fail2ban/filter.d/* /etc/fail2ban/filter.d/
 | `max_queued_connections` | int | 0 | 达到上限后排队的最大长度，0 表示不排队。 |
 | `per_ip_max_active_connections` | int | 0 | 覆盖 `[proxy]` 中的同名值；0 表示继承 proxy-wide 默认。 |
 
+启用排队时，建议将上游 rsyncd 对应模块的 `max connections` 设为 `0`（不限制），由 rsync-proxy 的 `max_active_connections` 控制并发。代理关闭上游连接并释放排队名额时，rsyncd 进程可能尚未释放连接计数锁；即使两边的并发上限相同，刚排到的客户端仍可能收到 `@ERROR: max connections (...) reached -- try again later`。客户端中断或配置了 `post-xfer exec` 时，这个窗口可能更长。代理目前会直接转发该错误，不会自动重新排队。
+
+关闭 rsyncd 的限制后，应确保客户端通过代理访问上游；直连 rsyncd 的连接不受代理的并发限制。
+
 # 监控
 
 rsync-proxy 在 `listen_http` 上暴露 Prometheus 格式的 `/metrics` 端点，覆盖连接生命周期、按 module/upstream 的累计流量、排队与失败计数、各类终止原因（idle/max-duration/throughput-floor/per-IP），以及 Go runtime 指标。
