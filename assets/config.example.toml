@@ -23,10 +23,11 @@ motd = "Served by rsync-proxy (https://github.com/ustclug/rsync-proxy)"
 
 # Hard upper bound (seconds) on the total wall-clock duration of the
 # bidirectional relay phase. When exceeded the proxy closes the
-# connection regardless of activity. rsync clients typically resume
-# on reconnect. 0 (the default) disables this cap. For public mirrors,
-# 14400 (4h) bounds the worst case while still accommodating large
-# initial syncs.
+# connection regardless of activity. rsync does not automatically
+# reconnect; retrying or resuming depends on how the caller invokes
+# it (e.g. a script or cron job). 0 (the default) disables this cap.
+# For public mirrors, 14400 (4h) bounds the worst case while still
+# accommodating large initial syncs.
 #relay_max_duration = 0
 
 # TCP keepalive period (seconds) applied to accepted client
